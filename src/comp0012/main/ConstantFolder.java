@@ -52,18 +52,23 @@ public class ConstantFolder
 
 		simpleIntFolding(instList, cpgen);
 
+		// these arraylists keep track of the variables that never get reassigned and can be folded
 		ArrayList<Integer> intConstVars = getConstantIntVars(instList, cpgen);
 		ArrayList<Integer> longConstVars = getConstantLongVars(instList, cpgen);
 		ArrayList<Integer> doubleConstVars = getConstantDoubleVars(instList, cpgen);
 		ArrayList<Integer> floatConstVars = getConstantFloatVars(instList, cpgen);
+		// these functions use those arraylists
 		constantIntFolding(instList, cpgen, intConstVars);
 		constantLongFolding(instList, cpgen, longConstVars);
 		constantDoubleFolding(instList, cpgen, doubleConstVars);
 		constantFloatFolding(instList, cpgen, floatConstVars);
+		//checks for (integer) (integer to float/double/long) and replaces with corresponding float/double/long instruction
 		convertFromInt(instList, cpgen);
+		// the rest are same, just for long, float, double
 		convertFromLong(instList, cpgen);
 		convertFromFloat(instList, cpgen);
 		convertFromDouble(instList, cpgen);
+		// do simple folding last, since if any constant folding is done, simple folding will use those replaced constants
 		simpleIntFolding(instList, cpgen);
 		simpleLongFolding(instList, cpgen);
 		simpleFloatFolding(instList, cpgen);
@@ -83,7 +88,7 @@ public class ConstantFolder
 		// replace method
 		cgen.replaceMethod(method, newMethod);
 
-		//keep repeating
+		//keep repeating if any changes were made - the repeated optimisation bit happens here
 		if(changed){
 			changed = false;
 //			System.out.println("something has changed, propagate stuff");
@@ -92,6 +97,8 @@ public class ConstantFolder
 	}
 
 	private void replaceInst(InstructionHandle[] toReplace, Instruction replacement, InstructionList instList){
+		// solves a weird problem that causes exception if instruction to be deleted is referenced by a goto statement
+		// this just takes the references and puts it onto the new replacement instruction
 		for (InstructionHandle handle :
 				toReplace) {
 			if (handle == toReplace[0]){
@@ -122,10 +129,12 @@ public class ConstantFolder
 	}
 
 	private void replaceInst(InstructionHandle toReplace, Instruction replacement){
+		// for 1 to 1 replacement of instruction
 		toReplace.setInstruction(replacement);
 	}
 
 	private void convertFromInt(InstructionList instList, ConstantPoolGen cpgen){
+		// looks for integer constants, and i2f/i2d/i2l, replaces these two with a single float/double/long constant
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(ICONST|BIPUSH|SIPUSH|LDC) (I2F|I2D|I2L)";
 		for(Iterator i = f.search(pat); i.hasNext();) {
@@ -152,6 +161,7 @@ public class ConstantFolder
 	}
 
 	private void convertFromLong(InstructionList instList, ConstantPoolGen cpgen){
+		// looks for long constant and conversion, replaces with corresponding constant type
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(LCONST|LDC2_W) (L2F|L2I|L2D)";
 		for(Iterator i = f.search(pat); i.hasNext();) {
@@ -177,6 +187,7 @@ public class ConstantFolder
 	}
 
 	private void convertFromFloat(InstructionList instList, ConstantPoolGen cpgen){
+		// looks for float constant and conversion, replaces with corresponding constant type
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(FCONST|LDC_W) (F2I|F2D|F2L)";
 		for(Iterator i = f.search(pat); i.hasNext();) {
@@ -203,6 +214,7 @@ public class ConstantFolder
 	}
 
 	private void convertFromDouble(InstructionList instList, ConstantPoolGen cpgen){
+		// looks for double constant and conversion, replaces with corresponding constant type
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(DCONST|LDC2_W) (D2F|D2I|D2L)";
 		for(Iterator i = f.search(pat); i.hasNext();) {
@@ -401,6 +413,7 @@ public class ConstantFolder
 	}
 
 	private int getInt(Instruction inst, ConstantPoolGen cpgen){
+		// just a helper function that takes an instruction we KNOW is an integer constant and extracts integer value
 		int tmp;
 
 		if(inst instanceof LDC){
@@ -418,14 +431,11 @@ public class ConstantFolder
 	}
 
 	private long getLong(Instruction inst, ConstantPoolGen cpgen){
-		// get long from constantpool and instruction from pat - match[0] and match[1]
 		long tmp;
 		if(inst instanceof LDC2_W){
 			tmp = (long)((LDC2_W) inst).getValue(cpgen);
 		}
 		else{
-			// for ICONST, BIPUSH, SIPUSH, we can cast it to an ICONST object and do getValue
-			// need to cast to integer since getValue returns a Number object
 			tmp = (long)(((LCONST)inst).getValue());
 		}
 		return tmp;
@@ -437,8 +447,6 @@ public class ConstantFolder
 			tmp = (float)((LDC_W) inst).getValue(cpgen);
 		}
 		else{
-			// for ICONST, BIPUSH, SIPUSH, we can cast it to an ICONST object and do getValue
-			// need to cast to integer since getValue returns a Number object
 			tmp = (float)(((FCONST)inst).getValue());
 		}
 		return tmp;
@@ -451,14 +459,13 @@ public class ConstantFolder
 			tmp = (double)((LDC2_W) inst).getValue(cpgen);
 		}
 		else{
-			// for ICONST, BIPUSH, SIPUSH, we can cast it to an ICONST object and do getValue
-			// need to cast to integer since getValue returns a Number object
 			tmp = (double)(((DCONST)inst).getValue());
 		}
 		return tmp;
 	}
 
 	private Instruction intConstInst(int result, ConstantPoolGen cpgen){
+		// takes an integer, generates an instruction to load that integer constant
 		Instruction toWrite;
 
 		// if else statements to decide which instruction to use based on value ranges
@@ -481,6 +488,7 @@ public class ConstantFolder
 	}
 
 	private Instruction longConstInst(long result, ConstantPoolGen cpgen){
+		// same as int, but for long
 		Instruction toWrite;
 
 		if (result == 0 || result == 1 ){
@@ -495,6 +503,7 @@ public class ConstantFolder
 	}
 
 	private Instruction floatConstInst(float result, ConstantPoolGen cpgen){
+		// same as int, but for float
 		Instruction toWrite;
 
 		if (result == 0.0f || result == 1.0f || result == 2.0f){
@@ -509,6 +518,7 @@ public class ConstantFolder
 	}
 
 	private Instruction doubleConstInst(double result, ConstantPoolGen cpgen){
+		// same as int, but for double
 		Instruction toWrite;
 
 		if (result == 0.0d || result == 1.0d ){
@@ -523,6 +533,8 @@ public class ConstantFolder
 	}
 
 	private ArrayList<Integer> getConstantIntVars(InstructionList instList, ConstantPoolGen cpgen){
+		// iterates through instList, if more than one istore/iinc for any index, we don't include that
+		// final arraylist contains variables assigned value once only
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(ISTORE|IINC)";
 		Hashtable<Integer, Boolean> vars = new Hashtable<>();
@@ -642,6 +654,8 @@ public class ConstantFolder
 	private void constantIntFolding(InstructionList instList, ConstantPoolGen cpgen, ArrayList<Integer> constantVars){
 		// pass an arraylist containing variable indexes
 		// variable indexes refer to variables that are assigned constant values (one number) and never change
+
+		// loads constant variables and their values into a hash table
 		int lastLoadedInt = 0;
 		Hashtable<Integer, Integer> vars = new Hashtable<>();
 
@@ -657,6 +671,7 @@ public class ConstantFolder
 			}
 		}
 
+		// does a second pass through instList, and then replaces all iload with respective constant from variable
 		pat = "(ILOAD)";
 		for(Iterator i = f.search(pat); i.hasNext();) {
 			InstructionHandle[] match = (InstructionHandle[]) i.next();
