@@ -43,12 +43,14 @@ public class ConstantFolder
 		InstructionList instList = new InstructionList(methodCode.getCode());
 
 		// Initialise a method generator with the original method as the baseline
-		MethodGen methodGen = new MethodGen(method.getAccessFlags(), method.getReturnType(), method.getArgumentTypes(), null, method.getName(), cgen.getClassName(), instList, cpgen);
+		MethodGen methodGen = new MethodGen(method.getAccessFlags(), method.getReturnType(), method.getArgumentTypes(),
+                null, method.getName(), cgen.getClassName(), instList, cpgen);
 
 		simple_int_folding(instList, cpgen, cp);
 
 		// just keeping this here as a framework to work with
 		for(InstructionHandle handle: instList.getInstructionHandles()){
+
 			// for each instruction
 			// if see an operation (bodmas) check if operands are constants:
 			// if they are - calculate and replace
@@ -170,6 +172,57 @@ public class ConstantFolder
 			}
 		}
 	}
+
+
+	//float simple folding operations following int folding structure
+    private void simple_float_folding(InstructionList instList, ConstantPoolGen cpgen, ConstantPool cp){
+        InstructionFinder f = new InstructionFinder(instList);
+        String pat ="(FCONST|LDC|LDC_W) (FCONST|LDC|LDC_W) (FMUL|FADD|FDIV|FSUB)";
+
+        for (Iterator i = f.search(pat); i.hasNext();){
+            InstructionHandle[] match = (InstructionHandle[]) i.next();
+            float c1, c2;
+
+            Instruction inst = match[0].getInstruction();
+            if(inst instanceof LDC){
+                c1 = ((ConstantFloat)(cp.getConstant(((LDC) inst).getIndex()))).getBytes();
+            }
+            else{
+                c1 = (int)(((FCONST)inst).getValue());
+            }
+            inst = match[1].getInstruction();
+            if(inst instanceof LDC){
+                c2 = ((ConstantFloat)(cp.getConstant(((LDC) inst).getIndex()))).getBytes();
+            }
+            else{
+                c2 = (float)(((FCONST)inst).getValue());
+            }
+
+
+            float result = 0;
+
+
+            switch (match[2].getInstruction().getName())
+            {
+                case "fmul":
+                    result = c1*c2;
+                    break;
+                case "fadd":
+                    result = c1+c2;
+                    break;
+                case "fsub":
+                    result = c1-c2;
+                    break;
+                case "fdiv":
+                    result = c1/c2;
+                    break;
+            }
+
+        }
+
+    }
+
+
 
 	public void display(Method method)
 	{
