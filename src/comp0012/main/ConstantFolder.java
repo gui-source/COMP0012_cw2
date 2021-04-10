@@ -3,10 +3,7 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Enumeration;
-import java.util.Hashtable;
-import java.util.Iterator;
+import java.util.*;
 
 import org.apache.bcel.classfile.*;
 import org.apache.bcel.generic.*;
@@ -50,7 +47,6 @@ public class ConstantFolder
 		MethodGen methodGen = new MethodGen(method.getAccessFlags(), method.getReturnType(), method.getArgumentTypes(),
 				null, method.getName(), cgen.getClassName(), instList, cpgen);
 
-		simpleIntFolding(instList, cpgen);
 
 		// these arraylists keep track of the variables that never get reassigned and can be folded
 		ArrayList<Integer> intConstVars = getConstantIntVars(instList, cpgen);
@@ -77,6 +73,9 @@ public class ConstantFolder
 
 		// making sure goto statements in instList are ok
 		instList.setPositions(true);
+
+		//
+		getUntouchables(instList, "ISTORE");
 
 		// neccessary stuff to do to methodGen
 		methodGen.setMaxStack();
@@ -804,6 +803,69 @@ public class ConstantFolder
 		}
 
 	}
+
+	private ArrayList<ArrayList<Integer>> getUntouchables(InstructionList instList, String store) {
+		//
+		System.out.println(instList.toString());
+		ArrayList<ArrayList<Integer>> notConstants = new ArrayList<>();
+		boolean isConstant = false;
+		InstructionHandle current = null;
+		ArrayList<Integer> newNot;
+		Hashtable<Integer, Integer> posToIndex= new Hashtable<>();
+		for (int i = 0; i < instList.getLength(); i++) {
+			if (i > 0){
+				newNot = new ArrayList<>(notConstants.get(i-1));
+				current = current.getNext();
+			}
+			else{
+				current = instList.getStart();
+				newNot = new ArrayList<>();
+			}
+			int currentPos = current.getPosition();
+			posToIndex.put(currentPos, i);
+			Instruction currentInst = current.getInstruction();
+			if (currentInst instanceof ConstantPushInstruction || currentInst instanceof LDC || currentInst instanceof LDC2_W){
+				isConstant = true;
+			}
+			else if (currentInst instanceof BranchInstruction){
+				InstructionFinder f = new InstructionFinder(instList);
+				String pat = "(IINC)";
+				for (Iterator j = f.search(pat); j.hasNext(); ) {
+					int fromIndex = current.getPosition();
+					int jumpIndex = ((BranchInstruction)currentInst).getTarget().getPosition();
+					InstructionHandle[] match = (InstructionHandle[]) j.next();
+					int currentPosition = match[0].getPosition();
+					// if iinc is in a loop
+					if (currentPosition < fromIndex && currentPosition > jumpIndex) {
+						// this is the indeterminable variable
+						int changedVar = ((IINC) match[0].getInstruction()).getIndex();
+						// within the entire loop, the variable is not determinable
+						for (int k = jumpIndex; k < fromIndex - 1; k++) {
+							if (!posToIndex.containsKey(k)){
+								continue;
+							}
+							ArrayList<Integer> currentLine = notConstants.get(posToIndex.get(k));
+							// remove changedVar from
+							if(!currentLine.contains(Integer.valueOf(changedVar))){
+								currentLine.add(Integer.valueOf(changedVar));
+							}
+						}
+					}
+				}
+			}
+			else if (currentInst instanceof StoreInstruction && isConstant){
+				if (currentInst.getName().compareTo(store)==0){
+					int nowConstant = ((StoreInstruction) currentInst).getIndex();
+					if(newNot.contains(Integer.valueOf(nowConstant))){
+						newNot.remove(Integer.valueOf(nowConstant));
+					}
+				}
+			}
+			notConstants.add(newNot);
+		}
+		return notConstants;
+	}
+
 
 
 	//float simple folding operations following int folding structure
