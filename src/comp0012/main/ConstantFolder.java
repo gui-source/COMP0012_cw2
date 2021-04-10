@@ -81,27 +81,27 @@ public class ConstantFolder
 
 
 		Attribute[] attributes = methodCode.getAttributes();
-		System.out.println("FOR METHODCODE: ");
-		System.out.println("+++++++++++++++++++");
-		System.out.println(methodCode.toString());
+//		System.out.println("FOR METHODCODE: ");
+//		System.out.println("+++++++++++++++++++");
+//		System.out.println(methodCode.toString());
 		for (Attribute a :
 				attributes) {
-			System.out.println("======================");
-			System.out.println("attribute: ");
-			System.out.println(a.toString());
-			System.out.println(a.getClass());
+//			System.out.println("======================");
+//			System.out.println("attribute: ");
+//			System.out.println(a.toString());
+//			System.out.println(a.getClass());
 			if(a instanceof StackMapTable){
 				StackMapTableEntry[] sm = ((StackMapTable) a).getStackMapTable();
-				for (StackMapTableEntry smte :
-						sm) {
-					System.out.println("smte is: ");
-					System.out.println(smte.toString());
-				}
-				System.out.println("NEW METHODCODE IS :");
-				System.out.println(newMethod.getCode().toString());
+//				for (StackMapTableEntry smte :
+//						sm) {
+//					System.out.println("smte is: ");
+//					System.out.println(smte.toString());
+//				}
+//				System.out.println("NEW METHODCODE IS :");
+//				System.out.println(newMethod.getCode().toString());
 				insertStackMapTable(newMethod, (StackMapTable) a);
 			}
-			System.out.println("=======================");
+//			System.out.println("=======================");
 		}
 //		}
 //		System.out.println("FOR NEWMETHODCODE: ");
@@ -137,12 +137,12 @@ public class ConstantFolder
 
 	private void insertStackMapTable(Method m, StackMapTable sm){
 		StackMapTableEntry[] smte = sm.getStackMapTable();
-		System.out.println("EEEEEEEEEEEEEEEEEEEEEEEEEEEE");
-		for (StackMapTableEntry entry :
-				smte) {
-			System.out.println("entry is: ");
-			System.out.println(entry.toString());
-		}
+//		System.out.println("EEEEEEEEEEEEEEEEEEEEEEEEEEEE");
+//		for (StackMapTableEntry entry :
+//				smte) {
+//			System.out.println("entry is: ");
+//			System.out.println(entry.toString());
+//		}
 
 		Attribute[] attributes = m.getAttributes();
 
@@ -154,7 +154,6 @@ public class ConstantFolder
 
 		int smteIndex = 0;
 		Integer offset = null;
-		Hashtable<Integer, BranchInstruction> posInstPair = new Hashtable<>();
 		ArrayList<Integer> pos = new ArrayList<>();
 		for (Iterator i = f.search(pat); i.hasNext() ; ) {
 			InstructionHandle[] match = (InstructionHandle[]) i.next();
@@ -165,33 +164,44 @@ public class ConstantFolder
 		for (int i = 0; i < pos.size(); i++)
 		{
 			int targetIndex = pos.get(i);
-			System.out.println("target index is : " + targetIndex);
-			System.out.println("from ");
-			System.out.println(smte[smteIndex].toString());
+//			System.out.println("target index is : " + targetIndex);
+//			System.out.println("from ");
+//			System.out.println(smte[smteIndex].toString());
 			if(offset == null) {
 				offset = targetIndex;
 			}
 			else{
 				offset = targetIndex - 1 - offset;
 			}
-			smte[smteIndex].setByteCodeOffsetDelta(offset);
-			System.out.println("to ");
-			System.out.println(smte[smteIndex].toString());
+			StackMapTableEntry s = smte[smteIndex];
+			String isSame = s.toString().substring(1, 6);
+			if (isSame.toLowerCase().compareTo("same_") == 0) {
+				smte[smteIndex] = new StackMapTableEntry(offset+64,offset, s.getTypesOfLocals(), s.getTypesOfStackItems(), s.getConstantPool());
+
+			}
+			else if(isSame.toLowerCase().compareTo("same,") == 0){
+				smte[smteIndex] = new StackMapTableEntry(offset ,offset, s.getTypesOfLocals(), s.getTypesOfStackItems(), s.getConstantPool());
+			}
+			else {
+				smte[smteIndex].setByteCodeOffsetDelta(offset);
+			}
+//			System.out.println("to ");
+//			System.out.println(smte[smteIndex].toString());
 			offset = targetIndex;
 			smteIndex += 1;
 		}
-		for (StackMapTableEntry entry :
-				smte) {
-			System.out.println("entry is: ");
-			System.out.println(entry.toString());
-		}
-		System.out.println("EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE");
+//		for (StackMapTableEntry entry :
+//				smte) {
+//			System.out.println("entry is: ");
+//			System.out.println(entry.toString());
+//		}
+//		System.out.println("EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE");
 
 		for (Attribute a :
 				attributes) {
 			if(a instanceof Code){
 				((Code) a).setAttributes(new Attribute[] {sm});
-				System.out.println("success!");
+//				System.out.println("success!");
 			}
 		}
 	}
@@ -1036,6 +1046,16 @@ public class ConstantFolder
 			Instruction inst = handle.getInstruction();
 			System.out.println(handle.toString());
 		}
+		for(Attribute a : methodCode.getAttributes()){
+			if(a instanceof StackMapTable) {
+				StackMapTableEntry[] sm = ((StackMapTable) a).getStackMapTable();
+				for (StackMapTableEntry smte :
+						sm) {
+					System.out.println("smte is: ");
+					System.out.println(smte.toString());
+				}
+			}
+		}
 	}
 
 	public void optimize()
@@ -1048,6 +1068,11 @@ public class ConstantFolder
 		for (Method method :
 				gen.getMethods()) {
 			optimizeMethod(gen, cpgen, method);
+		}
+
+		for(Method m:
+		gen.getMethods()){
+			display(m);
 		}
 
 		this.optimized = gen.getJavaClass();
