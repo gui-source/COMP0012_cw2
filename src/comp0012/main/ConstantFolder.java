@@ -8,7 +8,6 @@ import java.util.*;
 import org.apache.bcel.classfile.*;
 import org.apache.bcel.generic.*;
 import org.apache.bcel.util.InstructionFinder;
-import org.w3c.dom.Attr;
 
 
 public class ConstantFolder
@@ -44,18 +43,16 @@ public class ConstantFolder
 		MethodGen methodGen = new MethodGen(method.getAccessFlags(), method.getReturnType(), method.getArgumentTypes(),
 				null, method.getName(), cgen.getClassName(), instList, cpgen);
 
-
-
-		// these arraylists keep track of the variables that never get reassigned and can be folded
-		ArrayList<Integer> intConstVars = getConstantIntVars(instList);
-		ArrayList<Integer> longConstVars = getConstantLongVars(instList);
-		ArrayList<Integer> doubleConstVars = getConstantDoubleVars(instList);
-		ArrayList<Integer> floatConstVars = getConstantFloatVars(instList);
-		// these functions use those arraylists
-		constantIntFolding(instList, cpgen, intConstVars);
-		constantLongFolding(instList, cpgen, longConstVars);
-		constantDoubleFolding(instList, cpgen, doubleConstVars);
-		constantFloatFolding(instList, cpgen, floatConstVars);
+		// done at the start so simple folding can use these changes
+		constantIntFolding(instList, cpgen);
+		constantLongFolding(instList, cpgen);
+		constantDoubleFolding(instList, cpgen);
+		constantFloatFolding(instList, cpgen);
+		// same effect as constant folding
+		dynamicIntFolding(instList, cpgen);
+		dynamicLongFolding(instList, cpgen);
+		dynamicFloatFolding(instList, cpgen);
+		dynamicDoubleFolding(instList, cpgen);
 		//checks for (integer) (integer to float/double/long) and replaces with corresponding float/double/long instruction
 		convertFromInt(instList, cpgen);
 		// the rest are same, just for long, float, double
@@ -67,63 +64,24 @@ public class ConstantFolder
 		simpleLongFolding(instList, cpgen);
 		simpleFloatFolding(instList, cpgen);
 		simpleDoubleFolding(instList, cpgen);
-		//
-		dynamicIntFolding(instList, cpgen);
 
 		instList.setPositions(true);
 
-		// neccessary stuff to do to methodGen
+		// necessary stuff to do to methodGen
 		methodGen.setMaxStack();
 		methodGen.setMaxLocals();
 
 		// since methodGen has reference to instList and cpgen, it will create new method with optimizations done
 		Method newMethod = methodGen.getMethod();
 
-
+		// redo stackmap tables
 		Attribute[] attributes = methodCode.getAttributes();
-//		System.out.println("FOR METHODCODE: ");
-//		System.out.println("+++++++++++++++++++");
-//		System.out.println(methodCode.toString());
 		for (Attribute a :
 				attributes) {
-//			System.out.println("======================");
-//			System.out.println("attribute: ");
-//			System.out.println(a.toString());
-//			System.out.println(a.getClass());
 			if(a instanceof StackMapTable){
-				StackMapTableEntry[] sm = ((StackMapTable) a).getStackMapTable();
-//				for (StackMapTableEntry smte :
-//						sm) {
-//					System.out.println("smte is: ");
-//					System.out.println(smte.toString());
-//				}
-//				System.out.println("NEW METHODCODE IS :");
-//				System.out.println(newMethod.getCode().toString());
-				insertStackMapTable(newMethod, (StackMapTable) a);
+				updateStackMapTable(newMethod, (StackMapTable) a);
 			}
-//			System.out.println("=======================");
 		}
-//		}
-//		System.out.println("FOR NEWMETHODCODE: ");
-//		System.out.println(newMethod.toString());
-//		System.out.println(newMethod.getCode().toString());
-//		attributes = newMethod.getCode().getAttributes();
-//		for (Attribute a :
-//				attributes) {
-//			System.out.println("attribute: ");
-//			System.out.println(a.toString());
-//			if(a instanceof Code){
-//				Attribute[] aNested = ((Code) a).getAttributes();
-//				for (Attribute att :
-//						aNested) {
-//					System.out.println("code has attribute: ");
-//					System.out.println(att.toString());
-//					if (att instanceof StackMap){
-//						System.out.println("this above is a stackmaptable");
-//					}
-//				}
-//			}
-//		}
 
 		// replace method
 		cgen.replaceMethod(method, newMethod);
@@ -135,73 +93,70 @@ public class ConstantFolder
 		}
 	}
 
-	private void insertStackMapTable(Method m, StackMapTable sm){
+	// takes the old StackMapTable for a method, and updates it according to the new method code
+	private void updateStackMapTable(Method m, StackMapTable sm){
+		// initialisation stuff
 		StackMapTableEntry[] smte = sm.getStackMapTable();
-//		System.out.println("EEEEEEEEEEEEEEEEEEEEEEEEEEEE");
-//		for (StackMapTableEntry entry :
-//				smte) {
-//			System.out.println("entry is: ");
-//			System.out.println(entry.toString());
-//		}
-
 		Attribute[] attributes = m.getAttributes();
-
 		Code methodCode = m.getCode();
 		InstructionList instList = new InstructionList(methodCode.getCode());
 
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(BranchInstruction)";
 
-		int smteIndex = 0;
 		Integer offset = null;
+
+		// pos here refers to positions of where frames will be at
 		ArrayList<Integer> pos = new ArrayList<>();
-		for (Iterator i = f.search(pat); i.hasNext() ; ) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+
+		// look for all jumps, and note down their target positions - this is where a frame will be
+		for (Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext() ; ) {
+			InstructionHandle[] match = i.next();
 			int targetIndex = ((BranchInstruction) match[0].getInstruction()).getTarget().getPosition();
 			pos.add(targetIndex);
 		}
+
+		// sort them in ascending order
 		Collections.sort(pos);
+
+		// for each position where a frame will be, update the corresponding bytecode offset in the stack frame
 		for (int i = 0; i < pos.size(); i++)
 		{
+			// initialise targetIndex as position of jump, offset as offset delta for stack frame
 			int targetIndex = pos.get(i);
-//			System.out.println("target index is : " + targetIndex);
-//			System.out.println("from ");
-//			System.out.println(smte[smteIndex].toString());
 			if(offset == null) {
 				offset = targetIndex;
 			}
 			else{
 				offset = targetIndex - 1 - offset;
 			}
-			StackMapTableEntry s = smte[smteIndex];
+
+			StackMapTableEntry s = smte[i];
 			String isSame = s.toString().substring(1, 6);
+
+			// tag for SAME and SAME_LOCALS_1_STACK frame is just the offset/offset+64 respectively, so we need to
+			// create new smte object instead of just changing the offset delta
 			if (isSame.toLowerCase().compareTo("same_") == 0) {
-				smte[smteIndex] = new StackMapTableEntry(offset+64,offset, s.getTypesOfLocals(), s.getTypesOfStackItems(), s.getConstantPool());
+				smte[i] = new StackMapTableEntry(offset+64,offset, s.getTypesOfLocals(), s.getTypesOfStackItems(), s.getConstantPool());
 
 			}
 			else if(isSame.toLowerCase().compareTo("same,") == 0){
-				smte[smteIndex] = new StackMapTableEntry(offset ,offset, s.getTypesOfLocals(), s.getTypesOfStackItems(), s.getConstantPool());
+				smte[i] = new StackMapTableEntry(offset ,offset, s.getTypesOfLocals(), s.getTypesOfStackItems(), s.getConstantPool());
 			}
+			// otherwise we just use setByteCodeOffsetDelta method - quick and easy
 			else {
-				smte[smteIndex].setByteCodeOffsetDelta(offset);
+				smte[i].setByteCodeOffsetDelta(offset);
 			}
-//			System.out.println("to ");
-//			System.out.println(smte[smteIndex].toString());
-			offset = targetIndex;
-			smteIndex += 1;
-		}
-//		for (StackMapTableEntry entry :
-//				smte) {
-//			System.out.println("entry is: ");
-//			System.out.println(entry.toString());
-//		}
-//		System.out.println("EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE");
 
+			// update offset
+			offset = targetIndex;
+		}
+
+		// set the attribute of Code object to be the StackMapTable we just updated
 		for (Attribute a :
 				attributes) {
 			if(a instanceof Code){
 				((Code) a).setAttributes(new Attribute[] {sm});
-//				System.out.println("success!");
 			}
 		}
 	}
@@ -209,10 +164,8 @@ public class ConstantFolder
 	private void replaceInst(InstructionHandle[] toReplace, Instruction replacement, InstructionList instList){
 		// solves a weird problem that causes exception if instruction to be deleted is referenced by a goto statement
 		// this just takes the references and puts it onto the new replacement instruction
-
 		for (InstructionHandle handle :
 				toReplace){
-			// find out how to update the stackmaptable accordingly everytime we replaceInst
 			if (handle != toReplace[0] && handle.hasTargeters()) {
 				InstructionTargeter[] instTargs = handle.getTargeters();
 				for (InstructionTargeter it :
@@ -228,10 +181,7 @@ public class ConstantFolder
 		toReplace[0].setInstruction(replacement);
 		for (InstructionHandle handle :
 				toReplace) {
-			if (handle == toReplace[0]) {
-				continue;
-			}
-			else {
+			if (handle != toReplace[0])  {
 				try {
 					instList.delete(handle);
 				} catch (TargetLostException e) {
@@ -240,28 +190,13 @@ public class ConstantFolder
 				instList.setPositions();
 			}
 		}
-//		instList.insert(toReplace[0], replacement);
-//		for (InstructionHandle handle :
-//				toReplace) {
-//			try {
-//				instList.delete(handle);
-//			} catch (TargetLostException e) {
-//				System.out.println("target lost");
-//				e.printStackTrace();
-//			}
-//		}
+
 		instList.setPositions(true);
 		changed = true;
 	}
 
 	private void replaceInst(InstructionHandle toReplace, Instruction replacement, InstructionList instList){
 		// for 1 to 1 replacement of instruction
-//		instList.insert(toReplace, replacement);
-//		try {
-//			instList.delete(toReplace);
-//		} catch (TargetLostException e) {
-//			e.printStackTrace();
-//		}
 		toReplace.setInstruction(replacement);
 		instList.setPositions(true);
 		changed = true;
@@ -271,10 +206,12 @@ public class ConstantFolder
 		// looks for integer constants, and i2f/i2d/i2l, replaces these two with a single float/double/long constant
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(ICONST|BIPUSH|SIPUSH|LDC) (I2F|I2D|I2L)";
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
-			int original = getInt(match[0].getInstruction(), cpgen);
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
+			int original = (int) getConstant(match[0].getInstruction(), cpgen, int.class);
+
 			Instruction conversion = match[1].getInstruction();
+
 			Instruction inst;
 			if (conversion instanceof  I2F) {
 				inst = floatConstInst((float)original, cpgen);
@@ -286,9 +223,6 @@ public class ConstantFolder
 				inst = doubleConstInst( original, cpgen);
 			}
 
-//			instList.insert(match[0], inst);
-//
-//			deleteInst(match, instList);
 			replaceInst(match, inst, instList);
 		}
 	}
@@ -297,9 +231,9 @@ public class ConstantFolder
 		// looks for long constant and conversion, replaces with corresponding constant type
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(LCONST|LDC2_W) (L2F|L2I|L2D)";
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
-			long original = getLong(match[0].getInstruction(), cpgen);
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
+			long original = (long) getConstant(match[0].getInstruction(), cpgen, long.class);
 			Instruction conversion = match[1].getInstruction();
 			Instruction inst;
 			if (conversion instanceof  L2F) {
@@ -312,9 +246,6 @@ public class ConstantFolder
 				inst = doubleConstInst((double) original, cpgen);
 			}
 
-//			instList.insert(match[0], inst);
-//
-//			deleteInst(match, instList);
 			replaceInst(match, inst, instList);
 		}
 	}
@@ -323,9 +254,9 @@ public class ConstantFolder
 		// looks for float constant and conversion, replaces with corresponding constant type
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(FCONST|LDC_W) (F2I|F2D|F2L)";
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
-			float original = getFloat(match[0].getInstruction(), cpgen);
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
+			float original = (float) getConstant(match[0].getInstruction(), cpgen, float.class);
 			Instruction conversion = match[1].getInstruction();
 			Instruction inst;
 			if (conversion instanceof F2I){
@@ -338,10 +269,6 @@ public class ConstantFolder
 				inst = longConstInst((long) original, cpgen);
 			}
 
-
-//			instList.insert(match[0], inst);
-//
-//			deleteInst(match, instList);
 			replaceInst(match, inst, instList);
 		}
 	}
@@ -350,9 +277,9 @@ public class ConstantFolder
 		// looks for double constant and conversion, replaces with corresponding constant type
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(DCONST|LDC2_W) (D2F|D2I|D2L)";
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
-			double original = getDouble(match[0].getInstruction(), cpgen);
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
+			double original = (double) getConstant(match[0].getInstruction(), cpgen, double.class);
 			Instruction conversion = match[1].getInstruction();
 			Instruction inst;
 			if (conversion instanceof  D2F) {
@@ -365,10 +292,6 @@ public class ConstantFolder
 				inst = longConstInst((long) original, cpgen);
 			}
 
-
-//			instList.insert(match[0], inst);
-//
-//			deleteInst(match, instList);
 			replaceInst(match, inst, instList);
 		}
 	}
@@ -380,16 +303,15 @@ public class ConstantFolder
 
 		// standard for loop - iterate through i which contains results of search from f
 		// while i.hasNext, we continue looping
-		for(Iterator i = f.search(pat); i.hasNext();){
-
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
 			// initialise match as an array of instructions
 			// use instruction handle as easier way to deal with instructions this way
 			// within match, first element is integer, second element integer, third element operator
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+			InstructionHandle[] match =  i.next();
 
 			// extract values from match[0] and match[1]
-			int c1 = getInt(match[0].getInstruction(), cpgen);
-			int c2 = getInt(match[1].getInstruction(), cpgen);
+			int c1 = (int) getConstant(match[0].getInstruction(), cpgen, int.class);
+			int c2 = (int) getConstant(match[1].getInstruction(), cpgen, int.class);
 
 			// result doesn't need to be initialised tbh, intellij just super picky
 			// result is value that we are folding
@@ -415,8 +337,8 @@ public class ConstantFolder
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(LDC2_W|LCONST) (LDC2_W|LCONST) (LADD|LSUB|LMUL|LDIV)";
 		//iterate through each match
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
 			long l1, l2;
 			l1 = getLong(match[0].getInstruction(), cpgen);
 			l2 = getLong(match[1].getInstruction(), cpgen);
@@ -433,10 +355,6 @@ public class ConstantFolder
 			// write result
 			Instruction inst = longConstInst(result, cpgen);
 
-
-//			instList.insert(match[0], inst);
-//
-//			deleteInst(match, instList);
 			replaceInst(match, inst, instList);
 		}
 	}
@@ -446,8 +364,8 @@ public class ConstantFolder
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(LDC_W|FCONST) (LDC_W|FCONST) (FADD|FSUB|FMUL|FDIV)";
 		//iterate through each match
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
 			float f1, f2;
 			f1 = getFloat(match[0].getInstruction(), cpgen);
 			f2 = getFloat(match[1].getInstruction(), cpgen);
@@ -464,10 +382,6 @@ public class ConstantFolder
 			// write result
 			Instruction inst = floatConstInst(result, cpgen);
 
-
-//			instList.insert(match[0], inst);
-//
-//			deleteInst(match, instList);
 			replaceInst(match, inst, instList);
 		}
 	}
@@ -477,8 +391,8 @@ public class ConstantFolder
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(LDC2_W|DCONST) (LDC2_W|DCONST) (DADD|DSUB|DMUL|DDIV)";
 		//iterate through each match
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
 			double d1, d2;
 			d1 = getDouble(match[0].getInstruction(), cpgen);
 			d2 = getDouble(match[1].getInstruction(), cpgen);
@@ -495,10 +409,6 @@ public class ConstantFolder
 			// write result
 			Instruction inst = doubleConstInst(result, cpgen);
 
-
-//			instList.insert(match[0], inst);
-//
-//			deleteInst(match, instList);
 			replaceInst(match, inst, instList);
 		}
 	}
@@ -553,6 +463,28 @@ public class ConstantFolder
 			tmp = (double)(((DCONST)inst).getValue());
 		}
 		return tmp;
+	}
+
+	private <T> Number getConstant(Instruction inst, ConstantPoolGen cpgen, Class<T> constantType) throws ClassCastException{
+		if (constantType == int.class){
+			System.out.println("integer");
+			return getInt(inst, cpgen);
+		}
+		else if (constantType == long.class){
+			System.out.println("long");
+			return getLong(inst, cpgen);
+		}
+		else if (constantType == float.class){
+			System.out.println("float");
+			return getFloat(inst, cpgen);
+		}
+		else if (constantType == double.class){
+			System.out.println("double");
+			return getDouble(inst, cpgen);
+		}
+		else{
+			throw new ClassCastException("Instruction is not of suitable class");
+		}
 	}
 
 	private Instruction intConstInst(int result, ConstantPoolGen cpgen){
@@ -631,8 +563,8 @@ public class ConstantFolder
 		Hashtable<Integer, Boolean> vars = new Hashtable<>();
 		ArrayList<Integer> constantVars = new ArrayList<>();
 
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match = i.next();
 			Instruction inst = match[0].getInstruction();
 			int varIndex;
 			if(inst instanceof ISTORE) {
@@ -648,9 +580,9 @@ public class ConstantFolder
 				vars.put(varIndex, true);
 			}
 		}
-		Enumeration enu = vars.keys();
+		Enumeration<Integer> enu = vars.keys();
 		while(enu.hasMoreElements()){
-			int key = (int)enu.nextElement();
+			int key = enu.nextElement();
 			if(vars.get(key)){
 				constantVars.add(key);
 			}
@@ -664,8 +596,8 @@ public class ConstantFolder
 		Hashtable<Integer, Boolean> vars = new Hashtable<>();
 		ArrayList<Integer> constantVars = new ArrayList<>();
 
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
 			Instruction inst = match[0].getInstruction();
 			int varIndex;
 			varIndex = ((LSTORE) inst).getIndex();
@@ -676,9 +608,9 @@ public class ConstantFolder
 				vars.put(varIndex, true);
 			}
 		}
-		Enumeration enu = vars.keys();
+		Enumeration<Integer> enu = vars.keys();
 		while(enu.hasMoreElements()){
-			int key = (int)enu.nextElement();
+			int key = enu.nextElement();
 			if(vars.get(key)){
 				constantVars.add(key);
 			}
@@ -692,8 +624,8 @@ public class ConstantFolder
 		Hashtable<Integer, Boolean> vars = new Hashtable<>();
 		ArrayList<Integer> constantVars = new ArrayList<>();
 
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match = i.next();
 			Instruction inst = match[0].getInstruction();
 			int varIndex;
 			varIndex = ((FSTORE) inst).getIndex();
@@ -704,9 +636,9 @@ public class ConstantFolder
 				vars.put(varIndex, true);
 			}
 		}
-		Enumeration enu = vars.keys();
+		Enumeration<Integer> enu = vars.keys();
 		while(enu.hasMoreElements()){
-			int key = (int)enu.nextElement();
+			int key = enu.nextElement();
 			if(vars.get(key)){
 				constantVars.add(key);
 			}
@@ -720,8 +652,8 @@ public class ConstantFolder
 		Hashtable<Integer, Boolean> vars = new Hashtable<>();
 		ArrayList<Integer> constantVars = new ArrayList<>();
 
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
 			Instruction inst = match[0].getInstruction();
 			int varIndex;
 			varIndex = ((DSTORE) inst).getIndex();
@@ -732,9 +664,9 @@ public class ConstantFolder
 				vars.put(varIndex, true);
 			}
 		}
-		Enumeration enu = vars.keys();
+		Enumeration<Integer> enu = vars.keys();
 		while(enu.hasMoreElements()){
-			int key = (int)enu.nextElement();
+			int key = enu.nextElement();
 			if(vars.get(key)){
 				constantVars.add(key);
 			}
@@ -742,9 +674,10 @@ public class ConstantFolder
 		return constantVars;
 	}
 
-	private void constantIntFolding(InstructionList instList, ConstantPoolGen cpgen, ArrayList<Integer> constantVars){
+	private void constantIntFolding(InstructionList instList, ConstantPoolGen cpgen){
 		// pass an arraylist containing variable indexes
 		// variable indexes refer to variables that are assigned constant values (one number) and never change
+		ArrayList<Integer> constantVars = getConstantIntVars(instList);
 
 		// loads constant variables and their values into a hash table
 		Hashtable<Integer, Integer> vars = new Hashtable<>();
@@ -752,8 +685,8 @@ public class ConstantFolder
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(ICONST|BIPUSH|SIPUSH|LDC) (ISTORE)";
 
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
 			int varIndex = ((ISTORE)match[1].getInstruction()).getIndex();
 			int varValue = getInt(match[0].getInstruction(), cpgen);
 			if(constantVars.contains(varIndex)){
@@ -763,8 +696,8 @@ public class ConstantFolder
 
 		// does a second pass through instList, and then replaces all iload with respective constant from variable
 		pat = "(ILOAD)";
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match = i.next();
 			int varIndex = ((ILOAD)match[0].getInstruction()).getIndex();
 			if (vars.containsKey(varIndex)){
 				Instruction toWrite = intConstInst(vars.get(varIndex), cpgen);
@@ -774,16 +707,18 @@ public class ConstantFolder
 
 	}
 
-	private void constantLongFolding(InstructionList instList, ConstantPoolGen cpgen, ArrayList<Integer> constantVars){
+	private void constantLongFolding(InstructionList instList, ConstantPoolGen cpgen){
 		// pass an arraylist containing variable indexes
 		// variable indexes refer to variables that are assigned constant values (one number) and never change
+		ArrayList<Integer> constantVars = getConstantLongVars(instList);
+
 		Hashtable<Integer, Long> vars = new Hashtable<>();
 
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(LCONST|LDC2_W) (LSTORE)";
 
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
 			int varIndex = ((LSTORE)match[1].getInstruction()).getIndex();
 			long varValue = getLong(match[0].getInstruction(), cpgen);
 			if(constantVars.contains(varIndex)){
@@ -792,8 +727,8 @@ public class ConstantFolder
 		}
 
 		pat = "(LLOAD)";
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
 			int varIndex = ((LLOAD)match[0].getInstruction()).getIndex();
 			if (vars.containsKey(varIndex)){
 				Instruction toWrite = longConstInst(vars.get(varIndex), cpgen);
@@ -803,16 +738,17 @@ public class ConstantFolder
 
 	}
 
-	private void constantFloatFolding(InstructionList instList, ConstantPoolGen cpgen, ArrayList<Integer> constantVars){
+	private void constantFloatFolding(InstructionList instList, ConstantPoolGen cpgen){
 		// pass an arraylist containing variable indexes
 		// variable indexes refer to variables that are assigned constant values (one number) and never change
+		ArrayList<Integer> constantVars = getConstantFloatVars(instList);
 		Hashtable<Integer, Float> vars = new Hashtable<>();
 
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(FCONST|LDC_W) (FSTORE)";
 
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
 			int varIndex = ((FSTORE)match[1].getInstruction()).getIndex();
 			float varValue = getFloat(match[0].getInstruction(), cpgen);
 			if(constantVars.contains(varIndex)){
@@ -821,8 +757,8 @@ public class ConstantFolder
 		}
 
 		pat = "(FLOAD)";
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
 			int varIndex = ((FLOAD)match[0].getInstruction()).getIndex();
 			if (vars.containsKey(varIndex)){
 				Instruction toWrite = floatConstInst(vars.get(varIndex), cpgen);
@@ -832,16 +768,17 @@ public class ConstantFolder
 
 	}
 
-	private void constantDoubleFolding(InstructionList instList, ConstantPoolGen cpgen, ArrayList<Integer> constantVars){
+	private void constantDoubleFolding(InstructionList instList, ConstantPoolGen cpgen){
 		// pass an arraylist containing variable indexes
 		// variable indexes refer to variables that are assigned constant values (one number) and never change
+		ArrayList<Integer> constantVars = getConstantDoubleVars(instList);
 		Hashtable<Integer, Double> vars = new Hashtable<>();
 
 		InstructionFinder f = new InstructionFinder(instList);
 		String pat = "(DCONST|LDC2_w) (DSTORE)";
 
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
 			int varIndex = ((DSTORE)match[1].getInstruction()).getIndex();
 			double varValue = getDouble(match[0].getInstruction(), cpgen);
 			if(constantVars.contains(varIndex)){
@@ -850,8 +787,8 @@ public class ConstantFolder
 		}
 
 		pat = "(DLOAD)";
-		for(Iterator i = f.search(pat); i.hasNext();) {
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
+		for(Iterator<InstructionHandle[]> i = f.search(pat); i.hasNext();) {
+			InstructionHandle[] match =  i.next();
 			int varIndex = ((DLOAD)match[0].getInstruction()).getIndex();
 			if (vars.containsKey(varIndex)){
 				Instruction toWrite = doubleConstInst(vars.get(varIndex), cpgen);
@@ -861,7 +798,6 @@ public class ConstantFolder
 
 	}
 
-//	private Hashtable<Integer, ArrayList<Integer>> getUntouchables(InstructionList instList, String store) {
 	private ArrayList<ArrayList<Integer>> getUntouchables(InstructionList instList, String store) {
 		// gets list of variables that should not be folded at position (key value)
 		instList.setPositions(true);
@@ -888,10 +824,10 @@ public class ConstantFolder
 			else if (currentInst instanceof BranchInstruction){
 				InstructionFinder f = new InstructionFinder(instList);
 				String pat = "(IINC)";
-				for (Iterator j = f.search(pat); j.hasNext(); ) {
+				for (Iterator<InstructionHandle[]> j = f.search(pat); j.hasNext(); ) {
 					int fromIndex = current.getPosition();
 					int jumpIndex = ((BranchInstruction)currentInst).getTarget().getPosition();
-					InstructionHandle[] match = (InstructionHandle[]) j.next();
+					InstructionHandle[] match =  j.next();
 					int currentPosition = match[0].getPosition();
 					// if iinc is in a loop
 					if (currentPosition < fromIndex && currentPosition > jumpIndex) {
@@ -904,8 +840,8 @@ public class ConstantFolder
 							}
 							ArrayList<Integer> currentLine = notConstants.get(posToIndex.get(k));
 							// remove changedVar from
-							if(!currentLine.contains(Integer.valueOf(changedVar))){
-								currentLine.add(Integer.valueOf(changedVar));
+							if(!currentLine.contains(changedVar)){
+								currentLine.add(changedVar);
 							}
 						}
 					}
@@ -914,9 +850,7 @@ public class ConstantFolder
 			else if (currentInst instanceof StoreInstruction && isConstant){
 				if (currentInst.getName().compareTo(store)==0){
 					int nowConstant = ((StoreInstruction) currentInst).getIndex();
-					if(newNot.contains(Integer.valueOf(nowConstant))){
-						newNot.remove(Integer.valueOf(nowConstant));
-					}
+					newNot.remove(Integer.valueOf(nowConstant));
 				}
 			}
 			notConstants.add(newNot);
@@ -964,10 +898,8 @@ public class ConstantFolder
 //					System.out.println("storing " + lastInt + " in varIndex " + varIndex);
 				}
 				else{
-					if (varValues.containsKey(varIndex)) {
-						varValues.remove(varIndex);
-//						System.out.println(varIndex + " no longer constant ");
-					}
+					//						System.out.println(varIndex + " no longer constant ");
+					varValues.remove(varIndex);
 				}
 			}
 			// loading from valid var
@@ -985,75 +917,156 @@ public class ConstantFolder
 		}
 	}
 
-	//float simple folding operations following int folding structure
-	private void simple_float_folding(InstructionList instList, ConstantPoolGen cpgen, ConstantPool cp){
-		InstructionFinder f = new InstructionFinder(instList);
-		String pat ="(FCONST|LDC|LDC_W) (FCONST|LDC|LDC_W) (FMUL|FADD|FDIV|FSUB)";
-
-		for (Iterator i = f.search(pat); i.hasNext();){
-			InstructionHandle[] match = (InstructionHandle[]) i.next();
-			float c1, c2;
-
-			Instruction inst = match[0].getInstruction();
-			if(inst instanceof LDC){
-				c1 = ((ConstantFloat)(cp.getConstant(((LDC) inst).getIndex()))).getBytes();
+	private void dynamicLongFolding(InstructionList instList, ConstantPoolGen cpgen){
+		ArrayList<ArrayList<Integer>> untouchables = getUntouchables(instList, "LSTORE");
+		InstructionHandle current = null;
+		boolean lastInstConstant = false;
+		Long lastLong = null;
+		Hashtable<Integer, Long> varValues = new Hashtable<>();
+		for (int i = 0; i < instList.getLength(); i++) {
+			if(i == 0){
+				current = instList.getStart();
 			}
 			else{
-				c1 = (int)(((FCONST)inst).getValue());
+				current = current.getNext();
 			}
-			inst = match[1].getInstruction();
-			if(inst instanceof LDC){
-				c2 = ((ConstantFloat)(cp.getConstant(((LDC) inst).getIndex()))).getBytes();
+			Instruction instCurrent = current.getInstruction();
+			ArrayList<Integer> notConstant = untouchables.get(i);
+			// loading valid int const
+			if (instCurrent instanceof ConstantPushInstruction || instCurrent instanceof LDC || instCurrent instanceof LDC2_W){
+				lastInstConstant = true;
+				try {
+					lastLong = getLong(instCurrent, cpgen);
+				}
+				// if this exception pops up, we did not find an integer
+				catch (ClassCastException c){
+//					System.out.println("not constant");
+					lastInstConstant = false;
+				}
+			}
+			// storing AND last int was const
+			else if (instCurrent instanceof StoreInstruction ){
+				int varIndex = ((StoreInstruction) instCurrent).getIndex();
+				if (lastInstConstant) {
+					varValues.put(varIndex, lastLong);
+					lastInstConstant = false;
+				}
+				else{
+					varValues.remove(varIndex);
+				}
+			}
+			// loading from valid var
+			else if (instCurrent instanceof LLOAD){
+				int varIndex = ((LLOAD) instCurrent).getIndex();
+				if (varValues.containsKey(varIndex) && ! notConstant.contains(varIndex)){
+					Instruction toWrite = longConstInst(varValues.get(varIndex), cpgen);
+					replaceInst(current, toWrite, instList);
+				}
 			}
 			else{
-				c2 = (float)(((FCONST)inst).getValue());
+				lastInstConstant = false;
 			}
-
-
-			float result = 0;
-
-
-			switch (match[2].getInstruction().getName())
-			{
-				case "fmul":
-					result = c1*c2;
-					break;
-				case "fadd":
-					result = c1+c2;
-					break;
-				case "fsub":
-					result = c1-c2;
-					break;
-				case "fdiv":
-					result = c1/c2;
-					break;
-			}
-
 		}
-
 	}
 
-
-
-	public void display(Method method)
-	{
-		System.out.print("method: ");
-		System.out.println(method);
-		Code methodCode = method.getCode();
-		InstructionList instList = new InstructionList(methodCode.getCode());
-		for(InstructionHandle handle: instList.getInstructionHandles())
-		{
-			Instruction inst = handle.getInstruction();
-			System.out.println(handle.toString());
-		}
-		for(Attribute a : methodCode.getAttributes()){
-			if(a instanceof StackMapTable) {
-				StackMapTableEntry[] sm = ((StackMapTable) a).getStackMapTable();
-				for (StackMapTableEntry smte :
-						sm) {
-					System.out.println("smte is: ");
-					System.out.println(smte.toString());
+	private void dynamicFloatFolding(InstructionList instList, ConstantPoolGen cpgen){
+		ArrayList<ArrayList<Integer>> untouchables = getUntouchables(instList, "FSTORE");
+		InstructionHandle current = null;
+		boolean lastInstConstant = false;
+		Float lastFloat = null;
+		Hashtable<Integer, Float> varValues = new Hashtable<>();
+		for (int i = 0; i < instList.getLength(); i++) {
+			if(i == 0){
+				current = instList.getStart();
+			}
+			else{
+				current = current.getNext();
+			}
+			Instruction instCurrent = current.getInstruction();
+			ArrayList<Integer> notConstant = untouchables.get(i);
+			// loading valid int const
+			if (instCurrent instanceof ConstantPushInstruction || instCurrent instanceof LDC || instCurrent instanceof LDC2_W){
+				lastInstConstant = true;
+				try {
+					lastFloat = getFloat(instCurrent, cpgen);
 				}
+				// if this exception pops up, we did not find an integer
+				catch (ClassCastException c){
+					lastInstConstant = false;
+				}
+			}
+			// storing AND last int was const
+			else if (instCurrent instanceof StoreInstruction ){
+				int varIndex = ((StoreInstruction) instCurrent).getIndex();
+				if (lastInstConstant) {
+					varValues.put(varIndex, lastFloat);
+					lastInstConstant = false;
+				}
+				else{
+					varValues.remove(varIndex);
+				}
+			}
+			// loading from valid var
+			else if (instCurrent instanceof FLOAD){
+				int varIndex = ((FLOAD) instCurrent).getIndex();
+				if (varValues.containsKey(varIndex) && ! notConstant.contains(varIndex)){
+					Instruction toWrite = floatConstInst(varValues.get(varIndex), cpgen);
+					replaceInst(current, toWrite, instList);
+				}
+			}
+			else{
+				lastInstConstant = false;
+			}
+		}
+	}
+
+	private void dynamicDoubleFolding(InstructionList instList, ConstantPoolGen cpgen){
+		ArrayList<ArrayList<Integer>> untouchables = getUntouchables(instList, "DSTORE");
+		InstructionHandle current = null;
+		boolean lastInstConstant = false;
+		Double lastDouble = null;
+		Hashtable<Integer, Double> varValues = new Hashtable<>();
+		for (int i = 0; i < instList.getLength(); i++) {
+			if(i == 0){
+				current = instList.getStart();
+			}
+			else{
+				current = current.getNext();
+			}
+			Instruction instCurrent = current.getInstruction();
+			ArrayList<Integer> notConstant = untouchables.get(i);
+			// loading valid int const
+			if (instCurrent instanceof ConstantPushInstruction || instCurrent instanceof LDC || instCurrent instanceof LDC2_W){
+				lastInstConstant = true;
+				try {
+					lastDouble = getDouble(instCurrent, cpgen);
+				}
+				// if this exception pops up, we did not find an integer
+				catch (ClassCastException c){
+					lastInstConstant = false;
+				}
+			}
+			// storing AND last int was const
+			else if (instCurrent instanceof StoreInstruction ){
+				int varIndex = ((StoreInstruction) instCurrent).getIndex();
+				if (lastInstConstant) {
+					varValues.put(varIndex, lastDouble);
+					lastInstConstant = false;
+				}
+				else{
+					varValues.remove(varIndex);
+				}
+			}
+			// loading from valid var
+			else if (instCurrent instanceof DLOAD){
+				int varIndex = ((DLOAD) instCurrent).getIndex();
+				if (varValues.containsKey(varIndex) && ! notConstant.contains(varIndex)){
+					Instruction toWrite = doubleConstInst(varValues.get(varIndex), cpgen);
+					replaceInst(current, toWrite, instList);
+				}
+			}
+			else{
+				lastInstConstant = false;
 			}
 		}
 	}
@@ -1068,11 +1081,6 @@ public class ConstantFolder
 		for (Method method :
 				gen.getMethods()) {
 			optimizeMethod(gen, cpgen, method);
-		}
-
-		for(Method m:
-		gen.getMethods()){
-			display(m);
 		}
 
 		this.optimized = gen.getJavaClass();
