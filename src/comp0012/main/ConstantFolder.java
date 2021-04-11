@@ -874,18 +874,14 @@ public class ConstantFolder
 			}
 			Instruction instCurrent = current.getInstruction();
 			ArrayList<Integer> notConstant = untouchables.get(i);
-//			System.out.println(instCurrent.toString(true));
 			// loading valid int const
 			if (instCurrent instanceof ConstantPushInstruction || instCurrent instanceof LDC || instCurrent instanceof LDC2_W){
 				lastInstConstant = true;
 				try {
-//					System.out.println("found a constnat");
 					lastInt = getInt(instCurrent, cpgen);
-//					System.out.println(lastInt);
 				}
 				// if this exception pops up, we did not find an integer
 				catch (ClassCastException c){
-//					System.out.println("not constant");
 					lastInstConstant = false;
 				}
 			}
@@ -895,10 +891,8 @@ public class ConstantFolder
 				if (lastInstConstant) {
 					varValues.put(varIndex, lastInt);
 					lastInstConstant = false;
-//					System.out.println("storing " + lastInt + " in varIndex " + varIndex);
 				}
 				else{
-					//						System.out.println(varIndex + " no longer constant ");
 					varValues.remove(varIndex);
 				}
 			}
@@ -908,7 +902,6 @@ public class ConstantFolder
 				if (varValues.containsKey(varIndex) && ! notConstant.contains(varIndex)){
 					Instruction toWrite = intConstInst(varValues.get(varIndex), cpgen);
 					replaceInst(current, toWrite, instList);
-//					System.out.println("replacing " + varIndex + " with " + varValues.get(varIndex));
 				}
 			}
 			else{
@@ -940,7 +933,6 @@ public class ConstantFolder
 				}
 				// if this exception pops up, we did not find an integer
 				catch (ClassCastException c){
-//					System.out.println("not constant");
 					lastInstConstant = false;
 				}
 			}
